@@ -465,7 +465,7 @@ spring容器会对每个创建的bean的配置进行校验。然而，bean的属
 
 你可以完全相信Sprng。他会阻止配置问题，比如在容器载入时候引用一个不存在的beans和循环依赖。Spring会在完全被创建时尽可能玩设置属性和解析依赖。这意味着已经正确加载的spring容器以后当你请求一个对象时，如果在创建该对象或它的一个依赖项时出现问题可以生成异常。例如，bean在有确实或无效的属性时会抛出异常。一些配置项的潜在延迟可见性（potentially delayed visibility）是Applicatioin在默认情况下预实例化单例bean的原因。在实际需要这边bean之前，需要花费一些前期时间和内存，你可以在创建ApplicationContext时及时发现配置问题。你可以修改这个默认行为，这样就可以懒加载单例bean，而不是预先实例化。
 
-如果不存在循环依赖，且有一个或多个**协作**（collaboration）的bean被注入到一个依赖bean，每一个**协作**的bean会在它完全配置后被注入依赖的bean。这意味着，如果A依赖于B，则spring IOC 容器会在请求A的setter时完全配置好B，换言之，这个bean会被实例化（如果不是一个预实例化的单例），它的依赖项会被设置，并且会调用相关的生命周期方法（例如配置的init方法或InitializingBean的回调方法）。
+如果不存在循环依赖，且有一个或多个**协作**（collaborating）的bean被注入到一个依赖bean，每一个**协作**的bean会在它完全配置后被注入依赖的bean。这意味着，如果A依赖于B，则spring IOC 容器会在请求A的setter时完全配置好B，换言之，这个bean会被实例化（如果不是一个预实例化的单例），它的依赖项会被设置，并且会调用相关的生命周期方法（例如配置的init方法或InitializingBean的回调方法）。
 
 #### 1.4.1.5. 依赖注入例子
 
@@ -1001,6 +1001,8 @@ spring支持 [通过命名空间（namespaces）](https://docs.spring.io/spring/
 
 `c-namespace`。
 
+
+
 **混合属性名称**
 
 在设置bean的属性时，只要路径中的所有组件（出了最后的属性名称）都不为null，你可以使用混合或者嵌套的属性名称，如下：
@@ -1017,5 +1019,150 @@ spring支持 [通过命名空间（namespaces）](https://docs.spring.io/spring/
 
 #### 1.4.3. 使用 depends-on
 
+如果一个bean依赖于另一个bean，也就意味着一个bean作为另一个bean的属性。通常你会使用基于xml格式的`<ref/>`元素去配置元数据。然而，有一些bean之间的依赖并不直接。例如，要触发雷中的静态初始化器时，例如数据库驱动注册。`depends-on`属性可以显式地指定一个或多个bean在该bean初始化之前被初始化。
 
+下面的例子使用了`depends-on`属性展示了对单个bean的依赖：
+
+```xml
+<bean id="beanOne" class="ExampleBean" depends-on="manager"/>
+<bean id="manager" class="ManagerBean" />
+```
+
+为了表示对多个bean的依赖，需要为`depends-on`提供一个由依赖的名字组成的List（用逗号，空格或分号进行分隔），如下：
+
+```xml
+<bean id="beanOne" class="ExampleBean" depends-on="manager,accountDao">
+    <property name="manager" ref="manager" />
+</bean>
+
+<bean id="manager" class="ManagerBean" />
+<bean id="accountDao" class="x.y.jdbc.JdbcAccountDao" />
+```
+
+> `depends-on`属性不但可以指定初始化阶段所需依赖（initialization-time dependency），在单例bean下，还可以指定对应的销毁阶段所需依赖（a corresponding destruction-time dependency）//TODO。被`depends-on`指定的依赖在bean被销毁之前会被销毁。因此，`depends-on`也可以控制关闭顺序。
+
+
+
+#### 1.4.4. bean的懒加载
+
+默认情况下，`ApplicationContext`会在初始化过程中尽早（eagerly）创建和配置所有的[单例](https://docs.spring.io/spring/docs/current/spring-framework-reference/core.html#beans-factory-scopes-singleton)bean。通常，这种预实例化是可取的，这样会使配置或周围环境中的错误立即被发现，而不是在几个小时或几天后才发现。当预实例化可能会出现问题的情况下，你可以设置该bean使其不会被预初始化。懒加载的bean会告诉IoC容器在**第一次被使**用而不是启动的时候创建该bean。
+
+在XML中，可以使用`<bean/>`中的`lazy-init`属性控制，如下：
+
+```xml
+<bean id="lazy" class="com.something.ExpensiveToCreateBean" lazy-init="true"/>
+<bean name="not.lazy" class="com.something.AnotherBean"/>
+```
+
+当`ApplicationContext`读取上述配置时，懒加载的bean不会在`ApplicationContext`启动时创建，而非懒加载的bean则会被预加载。
+
+然而，当一个懒加载作为一个非懒加载的单例bean的依赖时，`ApplicationiContext`会在启动的时候就创建该bean从而为非懒加载的bean提供依赖。懒加载的bean会被注入到非懒加载的单例bean中。
+
+你也可以通过`<beans/>`元素的`default-lazy-init`属性去控制容器的懒加载，如下：
+
+```xml
+<beans default-lazy-init="true">
+    <!-- no beans will be pre-instantiated... -->
+    <!-- 该处所有的bean都不会被预加载 -->
+</beans>
+```
+
+
+
+#### 1.4.5. 自动装配
+
+spring容器可以自动状态协作（collaborating）的bean。spring容器通过检查`ApplicationContext`的内容，自动解析bean的协作者（collaborators）（other beans）。自动装配的优点如下：
+
+- 自动状态可以极大地减少所需指定的属性或者构造器参数（其它机制，像是[bean模板](https://docs.spring.io/spring/docs/current/spring-framework-reference/core.html#beans-child-bean-definitions)也有类似优势）
+- 自动状态可以随着对象改进更新配置。例如，如果你需要为一个类添加依赖，依赖会被自动引入而不需要修改配置。自动装配可以在代码库比较稳定的时候不用作出显式修改，因此在开发中十分实用。
+
+当使用基于XML的方式配置元数据是（详见[依赖注入](https://docs.spring.io/spring/docs/current/spring-framework-reference/core.html#beans-factory-collaborators)），可以用`<bean/>`中的`autowire`属性配置自动装配的模式。自动装配功能具有四种模式。你可以为每个bean配置自动装配，也可以按需配置。下为四种自动状态的模式：
+
+| 模式        | 描述                                                         |
+| ----------- | ------------------------------------------------------------ |
+| no          | （默认）不采用自动状态。必须用`ref`定义bean间的引用。对于大型部署（larger deployment），不建议修改默认配置，因为显示指明协作的bean（collaborator）具有更清晰，更可控。在某种程度上，它记录了系统结构。 |
+| byName      | 通过属性名称自动装配。spring会为需要自动装配的bean的属性查找名称相同的bean进行配置。例如，一个设置了`byName`模式的自动装配的bean包含了一个`master`属性（也就是说，它有一个`setMaster(..)`方法），spring会查找一个被命名为`master`的bean并用其配置bean的属性值。 |
+| byType      | 如果容器中恰好存在一个该属性类型的bean，则该属性被自动装配。如果有多个结果存在，一个致命的异常会被抛出说明你可能不应该为该bean配置`byType`模式的自动状态。如果结果为空，该属性值不会被设置。 |
+| constructor | 与`byType`模式类似，但适用于构造器参数。如果容器中有多于一个或没有（no exactly one bean）构造器类型对应的bean，会引起致命错误。 |
+
+在`byType`或`constructor`的自动装配模式下，可以配置数组和指明类型的集合（typed collections）。在这种情况下，容器中所有符合该类型的待选bean（all autowire candidates）都会被用于满足此依赖。你可以自动装配强类型的`Map`实例，如果Key的类型是`Stirng`。自动装配的`Map`中会包所有符合目标类型的bean实例，同时`Map`实例的键为对应的bean名称。
+
+```java
+//非官方示例
+<bean id="cat" class="com.spring.auto.autowire.Cat"></bean>
+    <bean id="dog" class="com.spring.auto.autowire.Dog"></bean>
+    <bean id="test" class="com.spring.auto.autowire.Person" autowire="byName">
+    <property name="say" value="测试"/>
+</bean>
+```
+
+##### 1.4.5.1. 自动装配的限制和缺点
+
+在项目中一致使用自动装配是最好的。如果不经常使用自动装配，开发者可能在使用自动装配一个或两个bean时产生一些疑问。
+
+因此需要了解自动装配的限制和缺点；
+
+- 在`property`和`construcor-arg`设置显示的依赖后会覆盖自动装配的属性值。你不可以自动装配简单属性，例如基础数据类型、`Strings`和`Classes`（以及简单属性的数组）。这一限制是由设计造成的。
+- 自动装配不如显示装配精确，但Spring谨慎地避免可能导致出现意料之外的结果的摸棱两可的情况出现。而且，Spring管理对象（ Spring-managed objects）之间的关系不再显式记录。
+- 装配信息可能对从spring容器中生成文档的工具不可用。
+- 要自动装配的setter方法或构造函数参数指定的类型可能会匹配容器内的多个bean。对于数组，集合和`Map`的实例，这病不成问题。然而，对于需要单个值的依赖来说，这种模糊性是不好解决的。如果没有唯一的bean可用，会抛出异常。
+
+在最后一种情况，你有几种选择：
+
+- 放弃使用自动装配，转而使用显式配置
+- 通过设置bean的`autowire-candidate`属性为`false`避免bean被用于自动装配，详见[下一小节](https://docs.spring.io/spring/docs/current/spring-framework-reference/core.html#beans-factory-autowire-candidate)
+
+- 通过设置一个bean的`<bean/>`中的`primary`属性为`true`，当自动装配时，作为首选的装配bean（primary candidate）
+- 通过基于注解的配置实施更细粒度的控制，详见[基于注解的容器配置](https://docs.spring.io/spring/docs/current/spring-framework-reference/core.html#beans-annotation-config)
+
+#### 1.4.5.2. 在自动装配中排除bean（Excluding a Bean from autowiring）
+
+对于每一个bean，你可以通过在Spring的XML中设置`<bean/>`的`autowire-candidate`属性为false，不让某些bean被用于自动装配。容器会使指定的bean对于自动装配功能不可用。（包括使用注解的配置，例如`@Autowired`）。
+
+> `autowire-candidate`属性被设计为只影响基于类型的自动装配，不会影响使用名称的显式引用，即使指定的bean没有被设置为被用于自动装配【个人理解：因为在spring中，bean的名字通常能够单一标识一个bean，不会出现多个匹配的情况，因此不用进行排除】。因此，如果一个bean的名称匹配，仍会被用于进行名称匹配的自动装配。
+
+你也可以根据bean名称进行模式匹配（pattern-matching）。顶层元素`<beans/>`的`default-autowire-candidates`属性接收一个或多个模式。例如，自动装配所需的bean的名称以`Reposiroty`结尾，属性值（也就是模式）为`*Repository`。要传入多个模式，需要定义一个用逗号分隔的列表。显式配置bean的`autowire-candidate`为`true`或`false`具有更高的优先级，对于这样的bean，模式匹配规则不适用。
+
+### 1.4.6. 方法注入
+
+在多数应用场景，容器中的大多数bean都是 [单例](https://docs.spring.io/spring/docs/current/spring-framework-reference/core.html#beans-factory-scopes-singleton) 的。当一个单例bean需要与另一个单例bean协作，或者非单例bean和另一个非单例bean，通常会通过将一个bean作为另一个的属性去定义他们的依赖关系。当这些bean的生命周期不一样时，就会出现问题。设想一个单例bean A，可能在A的每一个方法中需要使用非单例（原型（prototype））bean B。对于bean A，容器只会创建一次，因此，也只有一次机会去设置对应的属性。容器不能在每次beanA需要时，每次都给bean A提供一个新的bean B实例。
+
+一个解决方法是放弃一部分的控制反转（IoC）。你可以通过实现`ApplicationContextAware`接口 [将bean A告知容器](https://docs.spring.io/spring/docs/current/spring-framework-reference/core.html#beans-factory-aware)，并在每次bean A需要bean B的时候，通过[对容器进行`getBean("B")`调用](https://docs.spring.io/spring/docs/current/spring-framework-reference/core.html#beans-factory-client)来请求bean B（通常是新的）。
+
+```java
+// a class that uses a stateful Command-style class to perform some processing
+package fiona.apple;
+
+// Spring-API imports
+import org.springframework.beans.BeansException;
+import org.springframework.context.ApplicationContext;
+import org.springframework.context.ApplicationContextAware;
+
+public class CommandManager implements ApplicationContextAware {
+
+    private ApplicationContext applicationContext;
+
+    public Object process(Map commandState) {
+        // grab a new instance of the appropriate Command
+        Command command = createCommand();
+        // set the state on the (hopefully brand new) Command instance
+        command.setState(commandState);
+        return command.execute();
+    }
+
+    protected Command createCommand() {
+        // notice the Spring API dependency!
+        return this.applicationContext.getBean("command", Command.class);
+    }
+
+    public void setApplicationContext(
+            ApplicationContext applicationContext) throws BeansException {
+        this.applicationContext = applicationContext;
+    }
+}
+```
+
+上述过程并不理想，因为业务代码与spring框架产生耦合。方法注入，spring容器的高级特性，能够让你更好地处理这种情况。
+
+> 你可以在 [这篇博客](https://spring.io/blog/2004/08/06/method-injection/)中了解更多关于方法注入的目的。
 
